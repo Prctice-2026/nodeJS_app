@@ -41,7 +41,7 @@ jobs:
         run: docker images
 
       - name: Run Docker Image
-        run: docker run -d -p 8080:8080 $IMAGE_NAME:$IMAGE_TAG
+        run: docker run -d -p 9981:9981 $IMAGE_NAME:$IMAGE_TAG
 
       - name: list Docker container
         run: docker ps
@@ -56,4 +56,4 @@ jobs:
         run: sleep 30
 
       - name: Test App Locally Inside Runner
-        run: curl http://localhost:8080
+        run: curl http://localhost:9981

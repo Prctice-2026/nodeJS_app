@@ -1,0 +1,142 @@
+name: Push NodeJS App to AWS ECR and Deploy to EKS CI
+
+on:
+  push:
+    branches:
+      - master
+
+env:
+  IMAGE_TAG: ${{ github.run_number }}
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REPOSITORY: nodejs-web-app-docker-image
+  ECR_REGISTRY: <YOUR_AWS_ACCOUNT_ID>.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+
+  # EKS variables
+  EKS_CLUSTER_NAME: my-eks-cluster
+  K8S_DEPLOYMENT_NAME: nodejs-web-app-deployment
+
+jobs:
+  Build_Application:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Job
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm install
+
+  Test:
+    runs-on: ubuntu-latest
+    needs: Build_Application
+
+    steps:
+      - name: Checkout Job
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Run Tests
+        run: npm test
+
+  Build_Docker_Image:
+    runs-on: ubuntu-latest
+    needs: Test
+
+    steps:
+      - name: Checkout Job
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker images
+
+      - name: Save Docker Image
+        run: |
+          docker save $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -o image.tar
+
+      - name: Upload Docker Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: image.tar
+
+  Push_Docker_Image_to_ECR:
+    runs-on: ubuntu-latest
+    needs: Build_Docker_Image
+
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to AWS Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Download Docker Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker Image
+        run: docker load -i image.tar
+
+      - name: Push Docker Image to ECR
+        run: |
+          echo "Pushing Docker Image to AWS ECR"
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+  Deploy_to_EKS:
+    runs-on: ubuntu-latest
+    needs: Push_Docker_Image_to_ECR
+
+    steps:
+      - name: Checkout Job
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region $AWS_REGION \
+            --name $EKS_CLUSTER_NAME
+
+      - name: Check Kubernetes Nodes
+        run: kubectl get nodes
+
+      - name: Update Image Tag in Deployment YAML
+        run: |
+          sed -i "s|image: .*|image: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG|g" nodejs-app.yml
+          cat nodejs-app.yml
+
+      - name: Deploy to EKS
+        run: kubectl apply -f nodejs-app.yml
+
+      - name: Verify Deployment Rollout
+        run: kubectl rollout status deployment/$K8S_DEPLOYMENT_NAME
+
+      - name: Check Running Pods
+        run: kubectl get pods
+
+      - name: Check Services
+        run: kubectl get svc

@@ -44,7 +44,5 @@ jobs:
       - name: Wait for App Startup
         run: sleep 30
 
-        
-
       - name: Test App Locally Inside Runner
         run: curl http://localhost:9981
